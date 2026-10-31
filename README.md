@@ -1,5 +1,7 @@
 # NeuroSim 3D · Interactive Brain & Neuron Firing Simulator
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23837032.svg)](https://doi.org/10.5281/zenodo.23837032)
+
 Watch thousands of spiking neurons fire inside a 3D human brain. Stimulate a region, click a spot on the cortex, or switch the whole brain into deep sleep, caffeine, a seizure or anaesthesia and see how activity spreads through the network. Runs in the browser, built with React, TypeScript, three.js (React Three Fiber), Vite and Tailwind. English by default, with a Turkish mode (EN | TR toggle in the header).
 
 **Live demo:** https://pandakingpunc.github.io/neurosim-3d/
@@ -77,7 +79,13 @@ NeuroSim 3D, tarayıcıda çalışan interaktif bir insan beyni ve nöron ateşl
 
 Mustafa Karatüm · ORCID [0009-0006-7053-2872](https://orcid.org/0009-0006-7053-2872)
 
-Citation metadata is in [CITATION.cff](CITATION.cff).
+## Citation
+
+If you use NeuroSim 3D, please cite it through Zenodo:
+
+> Karatüm, M. (2026). *NeuroSim 3D: Interactive Brain & Neuron Firing Simulator* (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.23837033
+
+The concept DOI [10.5281/zenodo.23837032](https://doi.org/10.5281/zenodo.23837032) always points to the latest version. Citation metadata is in [CITATION.cff](CITATION.cff).
 
 ## License
 
