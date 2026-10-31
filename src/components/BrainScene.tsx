@@ -4,7 +4,8 @@ import { OrbitControls, Html, Stars } from "@react-three/drei";
 import * as THREE from "three";
 import type { BrainSim } from "../brain/simulation";
 import { REGIONS } from "../brain/regions";
-import { wrinkle } from "../brain/network";
+import { flattenMedial, wrinkle } from "../brain/network";
+import type { Lang } from "../i18n";
 
 export interface VisualSettings {
   showSynapses: boolean;
@@ -19,6 +20,7 @@ export interface VisualSettings {
 interface SceneProps {
   sim: BrainSim;
   visual: VisualSettings;
+  lang: Lang;
   onNeuronClick: (idx: number) => void;
 }
 
@@ -227,8 +229,7 @@ function makeHemisphere(side: number) {
     y *= w;
     z *= w;
     // medial yüzeyi düzleştir (fissür)
-    if (side * x < -0.3) x = -side * 0.3 + (x + side * 0.3) * 0.35;
-    p.setXYZ(i, x + side * 0.42, y, z);
+    p.setXYZ(i, flattenMedial(x, side) + side * 0.42, y, z);
   }
   g.computeVertexNormals();
   return g;
@@ -279,36 +280,45 @@ function BrainShell({ visible }: { visible: boolean }) {
 }
 
 /* ---------------- Etiketler ---------------- */
-function Labels({ visual }: { visual: VisualSettings }) {
-  if (!visual.showLabels) return null;
+// Html kökleri hep bağlı kalır, yalnızca gizlenir: drei Html'i React 19'da sökmek
+// "synchronously unmount a root" hatası veriyor.
+function Labels({ visual, lang }: { visual: VisualSettings; lang: Lang }) {
   return (
     <>
-      {REGIONS.map((r, i) =>
-        visual.visibleRegions[i] ? (
-          <Html key={r.id} position={r.labelPos} center distanceFactor={6} style={{ pointerEvents: "none" }}>
-            <div
-              className="whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-wide backdrop-blur-sm"
-              style={{
-                color: r.color,
-                borderColor: r.color + "66",
-                background: "rgba(5,8,20,0.65)",
-                boxShadow: `0 0 12px ${r.color}44`,
-              }}
-            >
-              {r.name}
-            </div>
-          </Html>
-        ) : null
-      )}
+      {REGIONS.map((r, i) => (
+        <Html
+          key={r.id}
+          position={r.labelPos}
+          center
+          distanceFactor={6}
+          zIndexRange={[5, 0]} // varsayılan dev z-index etiketleri yan panellerin üstüne çıkarıyordu
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            className="whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-wide backdrop-blur-sm"
+            style={{
+              display: visual.showLabels && visual.visibleRegions[i] ? "block" : "none",
+              color: r.color,
+              borderColor: r.color + "66",
+              background: "rgba(5,8,20,0.65)",
+              boxShadow: `0 0 12px ${r.color}44`,
+            }}
+          >
+            {r.name[lang]}
+          </div>
+        </Html>
+      ))}
     </>
   );
 }
 
 /* ---------------- Tıklama ile uyarma ---------------- */
-function ClickPicker({ sim, onPick }: { sim: BrainSim; onPick: (i: number) => void }) {
+function ClickPicker({ sim, visual, onPick }: { sim: BrainSim; visual: VisualSettings; onPick: (i: number) => void }) {
   const { gl, camera } = useThree();
   const simRef = useRef(sim);
   simRef.current = sim;
+  const visRef = useRef(visual);
+  visRef.current = visual;
   useEffect(() => {
     const el = gl.domElement;
     const ray = new THREE.Raycaster();
@@ -325,9 +335,11 @@ function ClickPicker({ sim, onPick }: { sim: BrainSim; onPick: (i: number) => vo
       ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
       const s = simRef.current;
+      const vis = visRef.current.visibleRegions;
       let best = -1;
       let bestScore = Infinity;
       for (let i = 0; i < s.net.count; i++) {
+        if (!vis[s.net.region[i]]) continue; // gizli bölgedeki nöronlar tıklanamaz
         pt.set(s.net.positions[i * 3], s.net.positions[i * 3 + 1], s.net.positions[i * 3 + 2]);
         const d = ray.ray.distanceSqToPoint(pt);
         if (d < 0.012) {
@@ -353,7 +365,7 @@ function ClickPicker({ sim, onPick }: { sim: BrainSim; onPick: (i: number) => vo
 
 /* ---------------- Simülasyon döngüsü ---------------- */
 function SimTicker({ sim }: { sim: BrainSim }) {
-  useFrame(() => sim.tick());
+  useFrame((_, delta) => sim.tick(delta));
   return null;
 }
 
@@ -365,7 +377,7 @@ function StimFlash({ sim }: { sim: BrainSim }) {
   return <pointLight ref={ref} position={[0, 0, 0]} color="#ffffff" intensity={0} distance={5} />;
 }
 
-export function BrainScene({ sim, visual, onNeuronClick }: SceneProps) {
+export function BrainScene({ sim, visual, lang, onNeuronClick }: SceneProps) {
   return (
     <Canvas
       camera={{ position: [2.4, 1.3, 3.6], fov: 45, near: 0.05, far: 100 }}
@@ -387,9 +399,9 @@ export function BrainScene({ sim, visual, onNeuronClick }: SceneProps) {
         <Synapses sim={sim} visual={visual} />
         <Neurons sim={sim} visual={visual} />
         <Pulses sim={sim} visual={visual} />
-        <Labels visual={visual} />
+        <Labels visual={visual} lang={lang} />
       </group>
-      <ClickPicker sim={sim} onPick={onNeuronClick} />
+      <ClickPicker sim={sim} visual={visual} onPick={onNeuronClick} />
       <OrbitControls
         enablePan={false}
         minDistance={1.6}

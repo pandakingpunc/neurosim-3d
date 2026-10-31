@@ -29,6 +29,11 @@ export function wrinkle(x: number, y: number, z: number) {
   );
 }
 
+/** Yarımkürenin orta hatta bakan yüzünü düzleştirir (longitudinal fissür). x yarımküre merkezine göredir. */
+export function flattenMedial(x: number, side: number) {
+  return side * x < -0.3 ? -side * 0.3 + (x + side * 0.3) * 0.35 : x;
+}
+
 export function generateNetwork(count: number, k: number, seed = 1): Network {
   const rnd = mulberry32(seed);
   const positions = new Float32Array(count * 3);
@@ -74,6 +79,8 @@ export function generateNetwork(count: number, k: number, seed = 1): Network {
     x *= w;
     y *= w;
     z *= w;
+    // kabuktaki gibi medial yüzeyi düzleştir; yoksa nöronlar karşı yarımküreye taşar
+    x = flattenMedial(x, side);
     x += side * 0.42;
     if (Math.abs(x) < 0.1 && y > -0.35) continue; // longitudinal fissür
     if (y < -0.55 && z < -0.35) continue; // beyincik için yer aç

@@ -1,9 +1,9 @@
 import type { Network } from "./network";
-import { REGION_INDEX } from "./regions";
+import { REGION_INDEX, REGIONS } from "./regions";
 
 export interface SimParams {
   paused: boolean;
-  speed: number; // adım / kare
+  speed: number; // adım / kare (60 Hz'e göre)
   threshold: number; // ateşleme eşiği
   synapticStrength: number; // sinaps ağırlığı
   excitability: number; // spontan ateşleme olasılığı (adım başına)
@@ -25,6 +25,7 @@ export const DEFAULT_PARAMS: SimParams = {
 
 const D = 8; // maksimum gecikme (adım)
 const HISTORY = 240;
+const STEPS_PER_SECOND = 60; // speed = 1 iken saniyedeki adım sayısı
 
 export class BrainSim {
   net: Network;
@@ -43,11 +44,13 @@ export class BrainSim {
   pulseSpeed: Float32Array;
   pulseCount = 0;
 
-  history = new Float32Array(HISTORY);
+  history = new Float32Array(HISTORY); // kare başına ateşleme
+  historyDt = new Float32Array(HISTORY); // kare süresi (sn)
   histIdx = 0;
   frameSpikes = 0;
   totalSpikes = 0;
   regionSpikes: Float32Array;
+  regionCounts: Uint32Array;
   stimFlash = 0;
 
   constructor(net: Network, params: SimParams) {
@@ -61,7 +64,9 @@ export class BrainSim {
     this.pulseEdge = new Int32Array(this.pulseCap);
     this.pulseT = new Float32Array(this.pulseCap);
     this.pulseSpeed = new Float32Array(this.pulseCap);
-    this.regionSpikes = new Float32Array(8);
+    this.regionSpikes = new Float32Array(REGIONS.length);
+    this.regionCounts = new Uint32Array(REGIONS.length);
+    for (let i = 0; i < net.count; i++) this.regionCounts[net.region[i]]++;
     // başlangıç potansiyelleri rastgele
     for (let i = 0; i < net.count; i++) this.v[i] = Math.random() * 0.5;
   }
@@ -74,7 +79,10 @@ export class BrainSim {
     this.delayBuf.forEach((b) => b.fill(0));
     this.pulseCount = 0;
     this.history.fill(0);
+    this.historyDt.fill(0);
+    this.regionSpikes.fill(0);
     this.totalSpikes = 0;
+    this.acc = 0;
     for (let i = 0; i < this.net.count; i++) this.v[i] = Math.random() * 0.5;
   }
 
@@ -82,20 +90,22 @@ export class BrainSim {
     return this.net.rnd[i] < this.params.inhibition;
   }
 
-  /** Kare başına çağrılır */
-  tick() {
+  /** Kare başına çağrılır; dt saniye cinsinden (ekran tazeleme hızından bağımsız) */
+  tick(dt: number) {
+    const frameDt = Math.min(Math.max(dt, 0), 0.1);
     this.frameSpikes = 0;
     if (!this.params.paused) {
-      this.acc += this.params.speed;
+      this.acc += this.params.speed * frameDt * STEPS_PER_SECOND;
       let guard = 0;
-      while (this.acc >= 1 && guard < 12) {
+      while (this.acc >= 1 && guard < 30) {
         this.stepOnce();
         this.acc -= 1;
         guard++;
       }
-      if (this.acc > 12) this.acc = 0;
+      if (this.acc >= 1) this.acc = 0;
     }
     this.history[this.histIdx] = this.frameSpikes;
+    this.historyDt[this.histIdx] = frameDt;
     this.histIdx = (this.histIdx + 1) % HISTORY;
     this.stimFlash *= 0.9;
   }
@@ -112,7 +122,22 @@ export class BrainSim {
     const regionSpikes = this.regionSpikes;
     for (let r = 0; r < regionSpikes.length; r++) regionSpikes[r] *= 0.95;
 
-    // 1) Girdileri topla, sızıntı uygula, spontan aktivite
+    // 1) Sinaps parlaklığını söndür, mevcut darbeleri ilerlet.
+    // Yeni darbeler bundan sonra doğar; böylece 1 adımlık sinapslarda da en az bir adım görünürler.
+    const eg = this.edgeGlow;
+    for (let e = 0; e < eg.length; e++) eg[e] *= 0.85;
+    let p = 0;
+    while (p < this.pulseCount) {
+      this.pulseT[p] += this.pulseSpeed[p];
+      if (this.pulseT[p] >= 1) {
+        const last = --this.pulseCount;
+        this.pulseEdge[p] = this.pulseEdge[last];
+        this.pulseT[p] = this.pulseT[last];
+        this.pulseSpeed[p] = this.pulseSpeed[last];
+      } else p++;
+    }
+
+    // 2) Girdileri topla, sızıntı uygula, spontan aktivite
     for (let i = 0; i < n; i++) {
       let vi = v[i] * leakKeep + cur[i];
       cur[i] = 0;
@@ -123,7 +148,7 @@ export class BrainSim {
       if (refr[i] > 0) refr[i]--;
     }
 
-    // 2) Ateşleme
+    // 3) Ateşleme
     const strength = params.synapticStrength;
     for (let i = 0; i < n; i++) {
       if (refr[i] > 0) {
@@ -147,27 +172,13 @@ export class BrainSim {
           this.delayBuf[(this.step + d) % D][t] += w * (0.8 + Math.random() * 0.4);
           this.edgeGlow[e] = 1;
           if (this.pulseCount < this.pulseCap) {
-            const p = this.pulseCount++;
-            this.pulseEdge[p] = e;
-            this.pulseT[p] = 0;
-            this.pulseSpeed[p] = 1 / d;
+            const q = this.pulseCount++;
+            this.pulseEdge[q] = e;
+            this.pulseT[q] = 0;
+            this.pulseSpeed[q] = 1 / d;
           }
         }
       }
-    }
-
-    // 3) Sinaps parlaklığı & darbeler
-    const eg = this.edgeGlow;
-    for (let e = 0; e < eg.length; e++) eg[e] *= 0.85;
-    let p = 0;
-    while (p < this.pulseCount) {
-      this.pulseT[p] += this.pulseSpeed[p];
-      if (this.pulseT[p] >= 1) {
-        const last = --this.pulseCount;
-        this.pulseEdge[p] = this.pulseEdge[last];
-        this.pulseT[p] = this.pulseT[last];
-        this.pulseSpeed[p] = this.pulseSpeed[last];
-      } else p++;
     }
     this.step++;
   }
@@ -206,11 +217,22 @@ export class BrainSim {
     this.stimFlash = 1;
   }
 
-  /** Son ~60 karedeki toplam ateşleme */
+  /** Son ~1 saniyedeki (gerçek zaman) ateşleme sayısı */
   recentSpikes() {
     let s = 0;
-    for (let i = 0; i < 60; i++) s += this.history[(this.histIdx - 1 - i + HISTORY) % HISTORY];
-    return s;
+    let t = 0;
+    for (let i = 0; i < HISTORY && t < 1; i++) {
+      const k = (this.histIdx - 1 - i + HISTORY) % HISTORY;
+      s += this.history[k];
+      t += this.historyDt[k];
+    }
+    return t > 0.2 ? Math.round(s / t) : 0;
+  }
+
+  /** Bölgenin nöron başına düşen güncel aktivitesi (bölge büyüklüğünden bağımsız) */
+  regionRate(r: number) {
+    const c = this.regionCounts[r];
+    return c > 0 ? this.regionSpikes[r] / c : 0;
   }
 
   activeCount() {

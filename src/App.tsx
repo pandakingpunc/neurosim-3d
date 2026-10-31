@@ -4,55 +4,53 @@ import { ActivityGraph, Section, Slider, Toggle } from "./components/ui";
 import { generateNetwork } from "./brain/network";
 import { BrainSim, DEFAULT_PARAMS, type SimParams } from "./brain/simulation";
 import { REGIONS } from "./brain/regions";
+import { LANGS, STRINGS, initialLang, saveLang, type Lang, type PresetId } from "./i18n";
 import { cn } from "./utils/cn";
 
 interface Preset {
-  name: string;
+  id: PresetId;
   icon: string;
-  desc: string;
   params: Partial<SimParams>;
 }
 
 const PRESETS: Preset[] = [
   {
-    name: "Dinlenme",
+    id: "rest",
     icon: "🧘",
-    desc: "Normal uyanık, sakin beyin aktivitesi. Düzensiz, düşük seviyeli ateşlemeler.",
     params: { threshold: 1, synapticStrength: 0.32, excitability: 0.003, leak: 0.06, inhibition: 0.2, refractory: 6 },
   },
   {
-    name: "Odaklanma",
+    id: "focus",
     icon: "🎯",
-    desc: "Yoğun düşünce. Artan uyarılabilirlik ve daha güçlü sinaptik iletişim.",
     params: { threshold: 0.95, synapticStrength: 0.42, excitability: 0.005, leak: 0.05, inhibition: 0.22, refractory: 5 },
   },
   {
-    name: "Derin Uyku",
+    id: "sleep",
     icon: "🌙",
-    desc: "Yavaş dalga uykusu. Nadir fakat geniş, senkron ateşleme dalgaları.",
     params: { threshold: 1.2, synapticStrength: 0.6, excitability: 0.0007, leak: 0.03, inhibition: 0.15, refractory: 14 },
   },
   {
-    name: "Kafein",
+    id: "caffeine",
     icon: "☕",
-    desc: "Adenozin reseptörleri bloke: eşik düşer, nöronlar daha kolay ateşlenir.",
     params: { threshold: 0.8, synapticStrength: 0.36, excitability: 0.007, leak: 0.07, inhibition: 0.2, refractory: 4 },
   },
   {
-    name: "Nöbet",
+    id: "seizure",
     icon: "⚡",
-    desc: "Epileptik aktivite: inhibisyon çöker, kontrolsüz zincirleme ateşleme yayılır.",
     params: { threshold: 0.75, synapticStrength: 0.85, excitability: 0.004, leak: 0.04, inhibition: 0.03, refractory: 3 },
   },
   {
-    name: "Anestezi",
+    id: "anesthesia",
     icon: "💤",
-    desc: "Genel anestezi: sinaptik iletim baskılanır, aktivite neredeyse durur.",
     params: { threshold: 1.6, synapticStrength: 0.12, excitability: 0.0003, leak: 0.1, inhibition: 0.3, refractory: 10 },
   },
 ];
 
+const isNarrow = () => typeof window !== "undefined" && window.innerWidth < 768;
+
 export default function App() {
+  const [lang, setLang] = useState<Lang>(initialLang);
+  const t = STRINGS[lang];
   const [neuronCount, setNeuronCount] = useState(2200);
   const [pendingCount, setPendingCount] = useState(2200);
   const [connectivity, setConnectivity] = useState(6);
@@ -71,9 +69,18 @@ export default function App() {
   });
   const [selectedRegion, setSelectedRegion] = useState<number | null>(null);
   const [stats, setStats] = useState({ rate: 0, active: 0, total: 0, regionRates: [] as number[] });
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [infoOpen, setInfoOpen] = useState(true);
+  // Dar ekranda iki panel birden sahneyi kapatır; başta kapalı açılır
+  const [panelOpen, setPanelOpen] = useState(() => !isNarrow());
+  const [infoOpen, setInfoOpen] = useState(() => !isNarrow());
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Dil: belge dili, başlık ve tercih
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    document.title = STRINGS[lang].docTitle;
+    saveLang(lang);
+  }, [lang]);
 
   // Ağ ve simülasyon
   const paramsRef = useRef(params);
@@ -89,11 +96,11 @@ export default function App() {
 
   // Nöron sayısı / bağlantı değişimini geciktir (debounce)
   useEffect(() => {
-    const t = setTimeout(() => {
+    const id = setTimeout(() => {
       setNeuronCount(pendingCount);
       setConnectivity(pendingK);
     }, 400);
-    return () => clearTimeout(t);
+    return () => clearTimeout(id);
   }, [pendingCount, pendingK]);
 
   // İstatistikler
@@ -103,7 +110,7 @@ export default function App() {
         rate: sim.recentSpikes(),
         active: sim.activeCount(),
         total: sim.totalSpikes,
-        regionRates: Array.from(sim.regionSpikes),
+        regionRates: REGIONS.map((_, i) => sim.regionRate(i)),
       });
     }, 250);
     return () => clearInterval(id);
@@ -111,7 +118,8 @@ export default function App() {
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 1800);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 1800);
   };
 
   const update = (p: Partial<SimParams>) => {
@@ -122,7 +130,7 @@ export default function App() {
   const applyPreset = (i: number) => {
     setParams((prev) => ({ ...prev, ...PRESETS[i].params }));
     setPresetIdx(i);
-    showToast(`${PRESETS[i].icon} ${PRESETS[i].name} modu etkin`);
+    showToast(t.presetToast(PRESETS[i].icon, t.presets[PRESETS[i].id].name));
   };
 
   const onNeuronClick = useCallback(
@@ -146,15 +154,32 @@ export default function App() {
       return { ...v, visibleRegions: REGIONS.map((_, j) => (allSolo ? true : j === i)) };
     });
 
+  const togglePanel = () => {
+    const open = !panelOpen;
+    setPanelOpen(open);
+    if (open && isNarrow()) setInfoOpen(false);
+  };
+  const toggleInfo = () => {
+    const open = !infoOpen;
+    setInfoOpen(open);
+    if (open && isNarrow()) setPanelOpen(false);
+  };
+
   const region = selectedRegion !== null ? REGIONS[selectedRegion] : null;
-  const maxRegionRate = Math.max(1, ...stats.regionRates);
+  const maxRegionRate = Math.max(1e-6, ...stats.regionRates);
+  const fmt = (n: number) => n.toLocaleString(t.locale);
 
   // Klavye kısayolları
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.code === "Space") {
         e.preventDefault();
+        if (e.repeat) return;
+        // Odaktaki düğme boşlukla ayrıca tıklanmasın
+        if (tag === "BUTTON") (e.target as HTMLElement).blur();
         update({ paused: !paramsRef.current.paused });
       } else if (e.key === "s" || e.key === "S") {
         sim.stimulateAll();
@@ -168,10 +193,10 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#05070f] font-sans text-slate-100">
-      <BrainScene sim={sim} visual={visual} onNeuronClick={onNeuronClick} />
+      <BrainScene sim={sim} visual={visual} lang={lang} onNeuronClick={onNeuronClick} />
 
       {/* Başlık */}
-      <header className="pointer-events-none absolute left-0 right-0 top-0 z-10 flex items-start justify-between p-4">
+      <header className="pointer-events-none absolute left-0 right-0 top-0 z-10 flex items-start justify-between gap-2 p-4">
         <div className="pointer-events-auto rounded-2xl border border-white/10 bg-[#0a0e1c]/70 px-4 py-3 backdrop-blur-md">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🧠</span>
@@ -179,18 +204,36 @@ export default function App() {
               <h1 className="text-base font-bold leading-tight tracking-tight">
                 NeuroSim <span className="text-cyan-400">3D</span>
               </h1>
-              <p className="text-[11px] text-slate-400">İnteraktif İnsan Beyni & Nöron Ateşleme Simülatörü</p>
+              <p className="text-[11px] text-slate-400">{t.subtitle}</p>
             </div>
           </div>
         </div>
 
-        {/* Canlı istatistikler */}
-        <div className="pointer-events-auto hidden gap-2 md:flex">
-          <Stat label="Nöron" value={neuronCount.toLocaleString("tr-TR")} />
-          <Stat label="Sinaps" value={sim.net.edgeCount.toLocaleString("tr-TR")} />
-          <Stat label="Ateşleme / sn" value={stats.rate.toLocaleString("tr-TR")} accent />
-          <Stat label="Aktif nöron" value={stats.active.toLocaleString("tr-TR")} />
-          <Stat label="Toplam" value={formatBig(stats.total)} />
+        <div className="pointer-events-auto flex items-start gap-2">
+          {/* Canlı istatistikler */}
+          <div className="hidden gap-2 lg:flex">
+            <Stat label={t.stats.neurons} value={fmt(neuronCount)} />
+            <Stat label={t.stats.synapses} value={fmt(sim.net.edgeCount)} />
+            <Stat label={t.stats.rate} value={fmt(stats.rate)} accent />
+            <Stat label={t.stats.active} value={fmt(stats.active)} />
+            <Stat label={t.stats.total} value={formatBig(stats.total)} />
+          </div>
+          {/* Dil seçici */}
+          <div className="flex overflow-hidden rounded-xl border border-white/10 bg-[#0a0e1c]/70 backdrop-blur-md">
+            {LANGS.map((l) => (
+              <button
+                key={l}
+                onClick={() => setLang(l)}
+                aria-pressed={lang === l}
+                className={cn(
+                  "px-2.5 py-2 font-mono text-[11px] font-semibold uppercase transition",
+                  lang === l ? "bg-cyan-500/25 text-cyan-300" : "text-slate-400 hover:bg-white/10"
+                )}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -199,31 +242,31 @@ export default function App() {
         <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-white/10 bg-[#0a0e1c]/75 px-3 py-2 backdrop-blur-md">
           <button
             onClick={() => update({ paused: !params.paused })}
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500 text-black transition hover:bg-cyan-400"
-            title="Oynat / Duraklat (Boşluk)"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-500 text-black transition hover:bg-cyan-400"
+            title={t.playPause}
           >
             {params.paused ? "▶" : "❚❚"}
           </button>
           <button
             onClick={() => sim.stimulateAll()}
-            className="rounded-xl border border-amber-400/40 bg-amber-400/15 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/25"
-            title="Tüm beyni uyar (S)"
+            className="whitespace-nowrap rounded-xl border border-amber-400/40 bg-amber-400/15 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/25"
+            title={t.stimulateAllTitle}
           >
-            ⚡ Uyar
+            ⚡ {t.stimulate}
           </button>
           <button
             onClick={() => {
               sim.reset();
-              showToast("Simülasyon sıfırlandı");
+              showToast(t.resetToast);
             }}
-            className="rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/10"
-            title="Sıfırla (R)"
+            className="whitespace-nowrap rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/10"
+            title={t.resetTitle}
           >
-            ↺ Sıfırla
+            ↺<span className="hidden sm:inline"> {t.reset}</span>
           </button>
           <div className="mx-1 h-6 w-px bg-white/10" />
-          <div className="flex items-center gap-2 text-[11px] text-slate-400">
-            <span>Hız</span>
+          <div className="flex items-center gap-1 text-[11px] text-slate-400 sm:gap-2">
+            <span className="hidden sm:inline">{t.speed}</span>
             {[0.25, 0.5, 1, 2, 4].map((s) => (
               <button
                 key={s}
@@ -237,15 +280,13 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="mx-1 hidden h-6 w-px bg-white/10 sm:block" />
-          <span className="hidden text-[11px] text-slate-500 sm:block">
-            Beyne tıkla → yerel uyarım · Sürükle → döndür
-          </span>
+          <div className="mx-1 hidden h-6 w-px bg-white/10 xl:block" />
+          <span className="hidden whitespace-nowrap text-[11px] text-slate-500 xl:block">{t.clickHint}</span>
         </div>
       </div>
 
       {toast && (
-        <div className="pointer-events-none absolute left-1/2 top-24 z-20 -translate-x-1/2 rounded-full border border-cyan-400/40 bg-cyan-500/15 px-4 py-1.5 text-sm text-cyan-200 backdrop-blur-md">
+        <div className="pointer-events-none absolute left-1/2 top-24 z-20 -translate-x-1/2 whitespace-nowrap rounded-full border border-cyan-400/40 bg-cyan-500/15 px-4 py-1.5 text-sm text-cyan-200 backdrop-blur-md">
           {toast}
         </div>
       )}
@@ -253,26 +294,26 @@ export default function App() {
       {/* Sol: Kontrol paneli */}
       <aside
         className={cn(
-          "absolute left-4 top-24 bottom-20 z-10 w-[300px] transition-transform duration-300",
+          "absolute left-4 top-24 bottom-20 z-10 w-[300px] max-w-[calc(100vw-4.5rem)] transition-transform duration-300",
           !panelOpen && "-translate-x-[calc(100%+1rem)]"
         )}
       >
         <button
-          onClick={() => setPanelOpen((o) => !o)}
+          onClick={togglePanel}
           className="absolute -right-9 top-0 flex h-9 w-9 items-center justify-center rounded-r-xl border border-l-0 border-white/10 bg-[#0a0e1c]/80 text-slate-300 backdrop-blur-md hover:text-white"
-          title="Ayarlar"
+          title={t.settings}
         >
           {panelOpen ? "‹" : "⚙"}
         </button>
         <div className="scrollbar-thin h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0a0e1c]/80 p-3 backdrop-blur-md">
           <div className="space-y-3">
-            <Section title="Zihinsel Durum">
+            <Section title={t.sections.mentalState}>
               <div className="grid grid-cols-3 gap-1.5">
                 {PRESETS.map((p, i) => (
                   <button
-                    key={p.name}
+                    key={p.id}
                     onClick={() => applyPreset(i)}
-                    title={p.desc}
+                    title={t.presets[p.id].desc}
                     className={cn(
                       "flex flex-col items-center gap-0.5 rounded-lg border px-1 py-2 text-[11px] transition",
                       presetIdx === i
@@ -281,19 +322,19 @@ export default function App() {
                     )}
                   >
                     <span className="text-lg leading-none">{p.icon}</span>
-                    {p.name}
+                    {t.presets[p.id].name}
                   </button>
                 ))}
               </div>
               {presetIdx !== null && (
-                <p className="text-[11px] leading-snug text-slate-400">{PRESETS[presetIdx].desc}</p>
+                <p className="text-[11px] leading-snug text-slate-400">{t.presets[PRESETS[presetIdx].id].desc}</p>
               )}
             </Section>
 
-            <Section title="Nöron Dinamikleri">
+            <Section title={t.sections.dynamics}>
               <Slider
-                label="Uyarılabilirlik"
-                hint="Nöronların kendiliğinden ateşlenme olasılığı"
+                label={t.sliders.excitability}
+                hint={t.sliders.excitabilityHint}
                 value={params.excitability}
                 min={0}
                 max={0.012}
@@ -302,8 +343,8 @@ export default function App() {
                 format={(v) => (v * 1000).toFixed(1) + "‰"}
               />
               <Slider
-                label="Sinaps gücü"
-                hint="Bir ateşlemenin komşu nörona aktardığı potansiyel"
+                label={t.sliders.strength}
+                hint={t.sliders.strengthHint}
                 value={params.synapticStrength}
                 min={0}
                 max={1}
@@ -312,18 +353,18 @@ export default function App() {
                 format={(v) => v.toFixed(2)}
               />
               <Slider
-                label="Ateşleme eşiği"
-                hint="Aksiyon potansiyeli için gereken membran potansiyeli"
+                label={t.sliders.threshold}
+                hint={t.sliders.thresholdHint}
                 value={params.threshold}
                 min={0.5}
                 max={2}
                 step={0.05}
                 onChange={(v) => update({ threshold: v })}
-                format={(v) => v.toFixed(2) + " mV"}
+                format={(v) => v.toFixed(2)}
               />
               <Slider
-                label="Membran sızıntısı"
-                hint="Potansiyelin ne kadar hızlı dinlenme seviyesine döndüğü"
+                label={t.sliders.leak}
+                hint={t.sliders.leakHint}
                 value={params.leak}
                 min={0.005}
                 max={0.2}
@@ -332,8 +373,8 @@ export default function App() {
                 format={(v) => (v * 100).toFixed(1) + "%"}
               />
               <Slider
-                label="İnhibitör nöron oranı"
-                hint="GABAerjik (baskılayıcı) nöronların oranı"
+                label={t.sliders.inhibition}
+                hint={t.sliders.inhibitionHint}
                 value={params.inhibition}
                 min={0}
                 max={0.5}
@@ -342,29 +383,29 @@ export default function App() {
                 format={(v) => Math.round(v * 100) + "%"}
               />
               <Slider
-                label="Refrakter süre"
-                hint="Ateşlemeden sonra nöronun tekrar ateşleyemediği süre"
+                label={t.sliders.refractory}
+                hint={t.sliders.refractoryHint}
                 value={params.refractory}
                 min={1}
                 max={20}
                 step={1}
                 onChange={(v) => update({ refractory: v })}
-                format={(v) => v + " adım"}
+                format={(v) => v + " " + t.sliders.steps}
               />
             </Section>
 
-            <Section title="Ağ Yapısı">
+            <Section title={t.sections.network}>
               <Slider
-                label="Nöron sayısı"
+                label={t.sliders.neuronCount}
                 value={pendingCount}
                 min={400}
                 max={5000}
                 step={100}
                 onChange={setPendingCount}
-                format={(v) => v.toLocaleString("tr-TR")}
+                format={fmt}
               />
               <Slider
-                label="Bağlantı / nöron"
+                label={t.sliders.connections}
                 value={pendingK}
                 min={2}
                 max={12}
@@ -375,18 +416,18 @@ export default function App() {
                 onClick={() => setSeed((s) => s + 1)}
                 className="w-full rounded-lg border border-white/10 py-1.5 text-[12px] text-slate-300 transition hover:bg-white/10"
               >
-                🎲 Ağı yeniden oluştur
+                {t.rebuild}
               </button>
             </Section>
 
-            <Section title="Görünüm">
-              <Toggle label="Sinapsları göster" checked={visual.showSynapses} onChange={(v) => setVisual({ ...visual, showSynapses: v })} />
-              <Toggle label="Sinyal darbeleri" checked={visual.showPulses} onChange={(v) => setVisual({ ...visual, showPulses: v })} />
-              <Toggle label="Beyin kabuğu" checked={visual.showShell} onChange={(v) => setVisual({ ...visual, showShell: v })} />
-              <Toggle label="Bölge etiketleri" checked={visual.showLabels} onChange={(v) => setVisual({ ...visual, showLabels: v })} />
-              <Toggle label="Otomatik döndür" checked={visual.autoRotate} onChange={(v) => setVisual({ ...visual, autoRotate: v })} />
+            <Section title={t.sections.view}>
+              <Toggle label={t.toggles.synapses} checked={visual.showSynapses} onChange={(v) => setVisual({ ...visual, showSynapses: v })} />
+              <Toggle label={t.toggles.pulses} checked={visual.showPulses} onChange={(v) => setVisual({ ...visual, showPulses: v })} />
+              <Toggle label={t.toggles.shell} checked={visual.showShell} onChange={(v) => setVisual({ ...visual, showShell: v })} />
+              <Toggle label={t.toggles.labels} checked={visual.showLabels} onChange={(v) => setVisual({ ...visual, showLabels: v })} />
+              <Toggle label={t.toggles.autoRotate} checked={visual.autoRotate} onChange={(v) => setVisual({ ...visual, autoRotate: v })} />
               <Slider
-                label="Nöron boyutu"
+                label={t.toggles.neuronSize}
                 value={visual.neuronSize}
                 min={0.4}
                 max={2.5}
@@ -402,36 +443,36 @@ export default function App() {
       {/* Sağ: Bölgeler & bilgi */}
       <aside
         className={cn(
-          "absolute right-4 top-24 bottom-20 z-10 w-[300px] transition-transform duration-300",
+          "absolute right-4 top-24 bottom-20 z-10 w-[300px] max-w-[calc(100vw-4.5rem)] transition-transform duration-300",
           !infoOpen && "translate-x-[calc(100%+1rem)]"
         )}
       >
         <button
-          onClick={() => setInfoOpen((o) => !o)}
+          onClick={toggleInfo}
           className="absolute -left-9 top-0 flex h-9 w-9 items-center justify-center rounded-l-xl border border-r-0 border-white/10 bg-[#0a0e1c]/80 text-slate-300 backdrop-blur-md hover:text-white"
-          title="Bilgi"
+          title={t.info}
         >
           {infoOpen ? "›" : "ⓘ"}
         </button>
         <div className="scrollbar-thin h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0a0e1c]/80 p-3 backdrop-blur-md">
           <div className="space-y-3">
-            <Section title="Beyin Aktivitesi (EEG)">
+            <Section title={t.sections.eeg}>
               <ActivityGraph sim={sim} />
-              <div className="grid grid-cols-3 gap-1 text-center md:hidden">
-                <MiniStat label="Ateşleme/sn" value={stats.rate} />
-                <MiniStat label="Aktif" value={stats.active} />
-                <MiniStat label="Toplam" value={formatBig(stats.total)} />
+              <div className="grid grid-cols-3 gap-1 text-center lg:hidden">
+                <MiniStat label={t.stats.rateShort} value={fmt(stats.rate)} />
+                <MiniStat label={t.stats.activeShort} value={fmt(stats.active)} />
+                <MiniStat label={t.stats.total} value={formatBig(stats.total)} />
               </div>
             </Section>
 
             <Section
-              title="Beyin Bölgeleri"
+              title={t.sections.regions}
               right={
                 <button
                   onClick={() => setVisual({ ...visual, visibleRegions: REGIONS.map(() => true) })}
                   className="text-[10px] text-cyan-400 hover:underline"
                 >
-                  Tümünü göster
+                  {t.showAll}
                 </button>
               }
             >
@@ -451,7 +492,7 @@ export default function App() {
                       <button
                         onClick={() => toggleRegion(i)}
                         onDoubleClick={() => soloRegion(i)}
-                        title="Göster/gizle (çift tık: yalnız bu)"
+                        title={t.regionToggleTitle}
                         className="h-3.5 w-3.5 shrink-0 rounded-full border-2 transition"
                         style={{
                           borderColor: r.color,
@@ -460,7 +501,7 @@ export default function App() {
                         }}
                       />
                       <button onClick={() => setSelectedRegion(i)} className="flex-1 text-left">
-                        <div className="text-[12px] font-medium text-slate-200">{r.name}</div>
+                        <div className="text-[12px] font-medium text-slate-200">{r.name[lang]}</div>
                         <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/8">
                           <div
                             className="h-full rounded-full transition-all duration-200"
@@ -475,7 +516,7 @@ export default function App() {
                         }}
                         className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold transition hover:bg-white/10"
                         style={{ color: r.color }}
-                        title={`${r.name} bölgesini uyar`}
+                        title={t.stimulateRegionTitle(r.name[lang])}
                       >
                         ⚡
                       </button>
@@ -485,13 +526,13 @@ export default function App() {
               </div>
             </Section>
 
-            <Section title={region ? region.name : "Bölge Bilgisi"}>
+            <Section title={region ? region.name[lang] : t.sections.regionInfo}>
               {region ? (
                 <div className="space-y-2">
                   <div className="h-1 w-12 rounded-full" style={{ background: region.color }} />
-                  <p className="text-[12px] leading-relaxed text-slate-300">{region.description}</p>
+                  <p className="text-[12px] leading-relaxed text-slate-300">{region.description[lang]}</p>
                   <div className="flex flex-wrap gap-1">
-                    {region.functions.map((f) => (
+                    {region.functions[lang].map((f) => (
                       <span
                         key={f}
                         className="rounded-full border px-2 py-0.5 text-[10px]"
@@ -506,40 +547,27 @@ export default function App() {
                     className="w-full rounded-lg py-1.5 text-[12px] font-semibold text-black transition hover:brightness-110"
                     style={{ background: region.color }}
                   >
-                    ⚡ Bu bölgeyi uyar
+                    {t.stimulateThisRegion}
                   </button>
                 </div>
               ) : (
-                <p className="text-[12px] leading-relaxed text-slate-400">
-                  Bir bölgeye tıklayarak işlevlerini öğrenin ya da 3D modelde bir nörona tıklayarak yerel bir
-                  uyarım başlatın.
-                </p>
+                <p className="text-[12px] leading-relaxed text-slate-400">{t.regionPlaceholder}</p>
               )}
             </Section>
 
-            <Section title="Nasıl Çalışır?">
+            <Section title={t.sections.howItWorks}>
               <ul className="space-y-1.5 text-[11px] leading-snug text-slate-400">
-                <li>
-                  <b className="text-slate-300">Membran potansiyeli:</b> Her nöron komşularından gelen sinyalleri
-                  toplar; potansiyel <i>eşiği</i> aşınca <b className="text-white">ateşlenir</b> (parlar).
-                </li>
-                <li>
-                  <b className="text-slate-300">Sinapslar:</b> Ateşleme, bağlı nöronlara gecikmeli bir darbe olarak
-                  iletilir. Uyarıcı nöronlar potansiyeli artırır, inhibitör nöronlar düşürür.
-                </li>
-                <li>
-                  <b className="text-slate-300">Refrakter dönem:</b> Ateşleyen nöron kısa süre tekrar ateşleyemez;
-                  bu, sinyalin tek yönde yayılmasını sağlar.
-                </li>
-                <li>
-                  <b className="text-slate-300">Beyin sapı</b> doğal bir "kalp pili" gibi daha sık ateşlenir ve
-                  korteksi uyanık tutar.
-                </li>
+                {t.how.map(([head, body]) => (
+                  <li key={head}>
+                    <b className="text-slate-300">{head}</b> {body}
+                  </li>
+                ))}
               </ul>
+              <p className="text-[10px] leading-snug text-slate-500">{t.modelNote}</p>
               <p className="text-[10px] text-slate-500">
-                Kısayollar: <kbd className="rounded bg-white/10 px-1">Boşluk</kbd> duraklat ·{" "}
-                <kbd className="rounded bg-white/10 px-1">S</kbd> uyar · <kbd className="rounded bg-white/10 px-1">R</kbd>{" "}
-                sıfırla
+                {t.shortcuts} <kbd className="rounded bg-white/10 px-1">{t.kbSpace}</kbd> {t.kbPause} ·{" "}
+                <kbd className="rounded bg-white/10 px-1">S</kbd> {t.kbStim} ·{" "}
+                <kbd className="rounded bg-white/10 px-1">R</kbd> {t.kbReset}
               </p>
             </Section>
           </div>
