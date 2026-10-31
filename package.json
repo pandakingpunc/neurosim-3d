@@ -1,6 +1,9 @@
 {
   "name": "neurosim-3d",
   "private": true,
+  "description": "Interactive 3D human brain and spiking neuron firing simulator",
+  "license": "MIT",
+  "author": "Mustafa Karatüm",
   "version": "1.0.0",
   "type": "module",
   "scripts": {

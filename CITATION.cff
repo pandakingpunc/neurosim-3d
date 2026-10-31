@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "NeuroSim 3D: Interactive Brain & Neuron Firing Simulator"
+abstract: >-
+  An interactive browser simulation of spiking neurons inside a 3D human brain.
+  Thousands of leaky integrate-and-fire neurons are placed in seven anatomical
+  regions and wired by nearest-neighbour and long-range synapses with
+  distance-dependent delays and excitatory or inhibitory weights. Users can
+  stimulate regions or single points, switch between mental-state presets
+  (rest, focus, deep sleep, caffeine, seizure, anaesthesia), tune neuron
+  dynamics and watch spikes, signal pulses and an EEG-like activity trace in
+  real time. English and Turkish interfaces.
+authors:
+  - family-names: Karatüm
+    given-names: Mustafa
+    orcid: "https://orcid.org/0009-0006-7053-2872"
+version: 1.0.0
+license: MIT
+date-released: 2026-10-31
+repository-code: "https://github.com/pandakingpunc/neurosim-3d"
+url: "https://pandakingpunc.github.io/neurosim-3d/"
+keywords:
+  - neuroscience
+  - spiking neural network
+  - integrate-and-fire
+  - brain
+  - neuron
+  - education
+  - simulation
