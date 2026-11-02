@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { cn } from "../utils/cn";
-import type { BrainSim } from "../brain/simulation";
+import { PROBE_LEN, RASTER_LEN, type BrainSim } from "../brain/simulation";
+import { REGIONS } from "../brain/regions";
 
 export function Slider({
   label,
@@ -133,4 +134,133 @@ export function ActivityGraph({ sim, color = "#22d3ee" }: { sim: BrainSim; color
     return () => cancelAnimationFrame(raf);
   }, [sim, color]);
   return <canvas ref={ref} width={320} height={80} className="h-20 w-full rounded-lg bg-black/30" />;
+}
+
+/** Prob nöronunun membran potansiyeli (osiloskop) */
+export function ProbeScope({ sim, labels }: { sim: BrainSim; labels: { v: string; th: string } }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d")!;
+    let raf = 0;
+    const draw = () => {
+      const W = c.width, H = c.height;
+      ctx.clearRect(0, 0, W, H);
+      const top = sim.params.threshold * 2.4; // görüntü aralığı: -0.4 .. 2.4×eşik
+      const bot = -0.4;
+      const yOf = (v: number) => H - 4 - ((Math.min(top, Math.max(bot, v)) - bot) / (top - bot)) * (H - 8);
+      // sıfır çizgisi
+      ctx.strokeStyle = "rgba(148,163,184,0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, yOf(0) + 0.5);
+      ctx.lineTo(W, yOf(0) + 0.5);
+      ctx.stroke();
+      const N = PROBE_LEN;
+      const xOf = (i: number) => (i / (N - 1)) * W;
+      // dinamik eşik (adaptasyonla yükselir)
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = "rgba(251,191,36,0.75)";
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (sim.probeHead + i) % N;
+        const y = yOf(sim.probeTh[k]);
+        if (i === 0) ctx.moveTo(xOf(i), y);
+        else ctx.lineTo(xOf(i), y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // potansiyel + aksiyon potansiyelleri
+      ctx.strokeStyle = "#22d3ee";
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = "#22d3ee";
+      ctx.shadowBlur = 4;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (sim.probeHead + i) % N;
+        const x = xOf(i);
+        if (sim.probeSpike[k]) {
+          ctx.lineTo(x, yOf(top));
+          ctx.lineTo(x, yOf(sim.probeV[k]));
+        } else if (i === 0) ctx.moveTo(x, yOf(sim.probeV[k]));
+        else ctx.lineTo(x, yOf(sim.probeV[k]));
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = "rgba(34,211,238,0.85)";
+      ctx.fillText(labels.v, 6, 12);
+      ctx.fillStyle = "rgba(251,191,36,0.85)";
+      ctx.fillText(labels.th, 6, 24);
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [sim, labels.v, labels.th]);
+  return <canvas ref={ref} width={320} height={96} className="h-24 w-full rounded-lg bg-black/40" />;
+}
+
+/** Spike raster: her satır bir nöron (bölgeye göre sıralı), her nokta bir ateşleme */
+export function RasterPlot({ sim }: { sim: BrainSim }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d")!;
+    let raf = 0;
+    const rows = sim.rasterIds.length;
+    const colors = Array.from(sim.rasterIds, (id) => REGIONS[sim.net.region[id]].color);
+    const draw = () => {
+      const W = c.width, H = c.height;
+      ctx.clearRect(0, 0, W, H);
+      const rh = H / rows;
+      const cw = W / RASTER_LEN;
+      for (let r = 0; r < rows; r++) {
+        const base = r * RASTER_LEN;
+        const dead = sim.dead[sim.rasterIds[r]];
+        if (dead) {
+          ctx.fillStyle = "rgba(100,110,130,0.18)";
+          ctx.fillRect(0, r * rh, W, Math.max(1, rh));
+          continue;
+        }
+        ctx.fillStyle = colors[r];
+        for (let i = 0; i < RASTER_LEN; i++) {
+          const k = (sim.rasterHead + i) % RASTER_LEN;
+          if (sim.raster[base + k]) ctx.fillRect(i * cw, r * rh, Math.max(1.5, cw), Math.max(1, rh));
+        }
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [sim]);
+  return <canvas ref={ref} width={320} height={120} className="h-[120px] w-full rounded-lg bg-black/30" />;
+}
+
+export function Tabs<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { id: T; label: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-md border border-white/10 text-[10px]">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          onClick={() => onChange(o.id)}
+          className={cn(
+            "px-2 py-0.5 font-semibold transition",
+            value === o.id ? "bg-cyan-500/25 text-cyan-300" : "text-slate-400 hover:bg-white/10"
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
 }

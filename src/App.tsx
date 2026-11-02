@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BrainScene, type VisualSettings } from "./components/BrainScene";
-import { ActivityGraph, Section, Slider, Toggle } from "./components/ui";
+import { BrainScene, type Tool, type VisualSettings } from "./components/BrainScene";
+import { ActivityGraph, ProbeScope, RasterPlot, Section, Slider, Tabs, Toggle } from "./components/ui";
+import { SpikeAudio } from "./audio";
 import { generateNetwork } from "./brain/network";
 import { BrainSim, DEFAULT_PARAMS, type SimParams } from "./brain/simulation";
 import { REGIONS } from "./brain/regions";
@@ -17,34 +18,48 @@ const PRESETS: Preset[] = [
   {
     id: "rest",
     icon: "🧘",
-    params: { threshold: 1, synapticStrength: 0.32, excitability: 0.003, leak: 0.06, inhibition: 0.2, refractory: 6 },
+    params: { threshold: 1, synapticStrength: 0.32, excitability: 0.003, leak: 0.06, inhibition: 0.2, refractory: 6, adaptation: 0, adaptTau: 60 },
   },
   {
     id: "focus",
     icon: "🎯",
-    params: { threshold: 0.95, synapticStrength: 0.42, excitability: 0.005, leak: 0.05, inhibition: 0.22, refractory: 5 },
+    params: { threshold: 0.95, synapticStrength: 0.42, excitability: 0.005, leak: 0.05, inhibition: 0.22, refractory: 5, adaptation: 0, adaptTau: 60 },
   },
   {
     id: "sleep",
     icon: "🌙",
-    params: { threshold: 1.2, synapticStrength: 0.6, excitability: 0.0007, leak: 0.03, inhibition: 0.15, refractory: 14 },
+    // Güçlü adaptasyon + güçlü yerel bağlantı: yukarı/aşağı durumlar, gezen yavaş dalgalar
+    params: { threshold: 1, synapticStrength: 0.9, excitability: 0.0006, leak: 0.03, inhibition: 0.12, refractory: 14, adaptation: 0.8, adaptTau: 60 },
   },
   {
     id: "caffeine",
     icon: "☕",
-    params: { threshold: 0.8, synapticStrength: 0.36, excitability: 0.007, leak: 0.07, inhibition: 0.2, refractory: 4 },
+    params: { threshold: 0.8, synapticStrength: 0.36, excitability: 0.007, leak: 0.07, inhibition: 0.2, refractory: 4, adaptation: 0, adaptTau: 60 },
   },
   {
     id: "seizure",
     icon: "⚡",
-    params: { threshold: 0.75, synapticStrength: 0.85, excitability: 0.004, leak: 0.04, inhibition: 0.03, refractory: 3 },
+    // İnhibisyon çöker; hızlı ve güçlü adaptasyon sürekli doygunluk yerine ritmik patlamalar üretir
+    params: { threshold: 0.75, synapticStrength: 0.85, excitability: 0.004, leak: 0.04, inhibition: 0.03, refractory: 8, adaptation: 3, adaptTau: 30 },
   },
   {
     id: "anesthesia",
     icon: "💤",
-    params: { threshold: 1.6, synapticStrength: 0.12, excitability: 0.0003, leak: 0.1, inhibition: 0.3, refractory: 10 },
+    params: { threshold: 1.6, synapticStrength: 0.12, excitability: 0.0003, leak: 0.1, inhibition: 0.3, refractory: 10, adaptation: 0, adaptTau: 60 },
   },
 ];
+
+const TOOLS: [Tool, string][] = [
+  ["stimulate", "⚡"],
+  ["probe", "🔬"],
+  ["lesion", "✂"],
+];
+const TOOL_ACTIVE: Record<Tool, string> = {
+  stimulate: "bg-amber-400/20 text-amber-300",
+  probe: "bg-cyan-500/25 text-cyan-300",
+  lesion: "bg-rose-500/25 text-rose-300",
+};
+const pct = (x: number) => (x * 100).toFixed(1) + "%";
 
 const isNarrow = () => typeof window !== "undefined" && window.innerWidth < 768;
 
@@ -68,7 +83,24 @@ export default function App() {
     neuronSize: 1,
   });
   const [selectedRegion, setSelectedRegion] = useState<number | null>(null);
-  const [stats, setStats] = useState({ rate: 0, active: 0, total: 0, regionRates: [] as number[] });
+  const [tool, setTool] = useState<Tool>("stimulate");
+  const [sound, setSound] = useState(false);
+  const [eegTab, setEegTab] = useState<"eeg" | "raster">("eeg");
+  const [probeOn, setProbeOn] = useState(false);
+  const audio = useMemo(() => new SpikeAudio(), []);
+  useEffect(() => () => audio.dispose(), [audio]);
+  const [stats, setStats] = useState({
+    rate: 0,
+    active: 0,
+    total: 0,
+    regionRates: [] as number[],
+    dead: 0,
+    learnUp: 0,
+    learnDown: 0,
+    learned: false,
+    probe: null as ReturnType<BrainSim["probeInfo"]>,
+    probeSpikes: 0,
+  });
   // Dar ekranda iki panel birden sahneyi kapatır; başta kapalı açılır
   const [panelOpen, setPanelOpen] = useState(() => !isNarrow());
   const [infoOpen, setInfoOpen] = useState(() => !isNarrow());
@@ -94,6 +126,11 @@ export default function App() {
     sim.params = params;
   }, [params, sim]);
 
+  // Geliştirme sırasında tarayıcı testleri için (üretim derlemesine girmez)
+  useEffect(() => {
+    if (import.meta.env.DEV) (window as unknown as { __sim: BrainSim }).__sim = sim;
+  }, [sim]);
+
   // Nöron sayısı / bağlantı değişimini geciktir (debounce)
   useEffect(() => {
     const id = setTimeout(() => {
@@ -105,12 +142,20 @@ export default function App() {
 
   // İstatistikler
   useEffect(() => {
+    setProbeOn(false); // yeni ağda eski prob yok
     const id = setInterval(() => {
+      const ws = sim.weightsDirty ? sim.weightStats() : null;
       setStats({
         rate: sim.recentSpikes(),
         active: sim.activeCount(),
         total: sim.totalSpikes,
         regionRates: REGIONS.map((_, i) => sim.regionRate(i)),
+        dead: sim.deadCount,
+        learnUp: ws ? ws.up : 0,
+        learnDown: ws ? ws.down : 0,
+        learned: !!ws,
+        probe: sim.probeInfo(),
+        probeSpikes: sim.probeSpikes,
       });
     }, 250);
     return () => clearInterval(id);
@@ -124,7 +169,7 @@ export default function App() {
 
   const update = (p: Partial<SimParams>) => {
     setParams((prev) => ({ ...prev, ...p }));
-    if (!("paused" in p) && !("speed" in p)) setPresetIdx(null);
+    if (!("paused" in p) && !("speed" in p) && !("plasticity" in p)) setPresetIdx(null);
   };
 
   const applyPreset = (i: number) => {
@@ -133,13 +178,44 @@ export default function App() {
     showToast(t.presetToast(PRESETS[i].icon, t.presets[PRESETS[i].id].name));
   };
 
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const langRef = useRef(lang);
+  langRef.current = lang;
   const onNeuronClick = useCallback(
     (idx: number) => {
-      sim.stimulateAt(idx);
-      setSelectedRegion(sim.net.region[idx]);
+      const reg = sim.net.region[idx];
+      const tool = toolRef.current;
+      if (tool === "probe") {
+        sim.setProbe(idx);
+        setProbeOn(true);
+        setInfoOpen(true);
+        if (isNarrow()) setPanelOpen(false);
+        showToast(tRef.current.probe.toast(REGIONS[reg].name[langRef.current]));
+      } else if (tool === "lesion") {
+        const before = sim.deadCount;
+        sim.lesionAt(idx);
+        showToast(tRef.current.lesionToast(sim.deadCount - before));
+      } else {
+        sim.stimulateAt(idx);
+      }
+      setSelectedRegion(reg);
     },
     [sim]
   );
+
+  const closeProbe = () => {
+    sim.setProbe(-1);
+    setProbeOn(false);
+  };
+
+  const toggleSound = () => {
+    const on = !audio.enabled;
+    void audio.setEnabled(on);
+    setSound(on);
+  };
 
   const toggleRegion = (i: number) =>
     setVisual((v) => {
@@ -169,6 +245,9 @@ export default function App() {
   const maxRegionRate = Math.max(1e-6, ...stats.regionRates);
   const fmt = (n: number) => n.toLocaleString(t.locale);
 
+  const toggleSoundRef = useRef(toggleSound);
+  toggleSoundRef.current = toggleSound;
+
   // Klavye kısayolları
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -185,7 +264,11 @@ export default function App() {
         sim.stimulateAll();
       } else if (e.key === "r" || e.key === "R") {
         sim.reset();
-      }
+      } else if (e.key === "m" || e.key === "M") {
+        if (!e.repeat) toggleSoundRef.current();
+      } else if (e.key === "1") setTool("stimulate");
+      else if (e.key === "2") setTool("probe");
+      else if (e.key === "3") setTool("lesion");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -193,7 +276,7 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#05070f] font-sans text-slate-100">
-      <BrainScene sim={sim} visual={visual} lang={lang} onNeuronClick={onNeuronClick} />
+      <BrainScene sim={sim} visual={visual} lang={lang} tool={tool} audio={audio} onNeuronClick={onNeuronClick} />
 
       {/* Başlık */}
       <header className="pointer-events-none absolute left-0 right-0 top-0 z-10 flex items-start justify-between gap-2 p-4">
@@ -239,7 +322,7 @@ export default function App() {
 
       {/* Alt ipucu + oynatma çubuğu */}
       <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 -translate-x-1/2">
-        <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-white/10 bg-[#0a0e1c]/75 px-3 py-2 backdrop-blur-md">
+        <div className="pointer-events-auto flex w-max max-w-[calc(100vw-1rem)] flex-wrap items-center justify-center gap-2 rounded-2xl border border-white/10 bg-[#0a0e1c]/75 px-3 py-2 backdrop-blur-md">
           <button
             onClick={() => update({ paused: !params.paused })}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-500 text-black transition hover:bg-cyan-400"
@@ -252,7 +335,7 @@ export default function App() {
             className="whitespace-nowrap rounded-xl border border-amber-400/40 bg-amber-400/15 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/25"
             title={t.stimulateAllTitle}
           >
-            ⚡ {t.stimulate}
+            ⚡<span className="hidden sm:inline"> {t.stimulate}</span>
           </button>
           <button
             onClick={() => {
@@ -280,8 +363,37 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="mx-1 hidden h-6 w-px bg-white/10 xl:block" />
-          <span className="hidden whitespace-nowrap text-[11px] text-slate-500 xl:block">{t.clickHint}</span>
+          <div className="mx-1 hidden h-6 w-px bg-white/10 sm:block" />
+          <div className="flex overflow-hidden rounded-xl border border-white/10">
+            {TOOLS.map(([id, icon], k) => (
+              <button
+                key={id}
+                onClick={() => setTool(id)}
+                aria-pressed={tool === id}
+                title={t.toolTitle(t.tools[id].name, String(k + 1))}
+                className={cn(
+                  "flex items-center gap-1 px-2 py-1.5 text-xs font-semibold transition",
+                  tool === id ? TOOL_ACTIVE[id] : "text-slate-400 hover:bg-white/10"
+                )}
+              >
+                <span>{icon}</span>
+                <span className="hidden md:inline">{t.tools[id].name}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={toggleSound}
+            aria-pressed={sound}
+            title={t.soundTitle}
+            className={cn(
+              "rounded-xl border px-2 py-1.5 text-xs transition",
+              sound ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : "border-white/10 text-slate-400 hover:bg-white/10"
+            )}
+          >
+            {sound ? "🔊" : "🔈"}
+          </button>
+          <div className="mx-1 hidden h-6 w-px bg-white/10 2xl:block" />
+          <span className="hidden whitespace-nowrap text-[11px] text-slate-500 2xl:block">{t.tools[tool].hint}</span>
         </div>
       </div>
 
@@ -294,7 +406,7 @@ export default function App() {
       {/* Sol: Kontrol paneli */}
       <aside
         className={cn(
-          "absolute left-4 top-24 bottom-20 z-10 w-[300px] max-w-[calc(100vw-4.5rem)] transition-transform duration-300",
+          "absolute left-4 top-24 bottom-28 lg:bottom-20 z-10 w-[300px] max-w-[calc(100vw-4.5rem)] transition-transform duration-300",
           !panelOpen && "-translate-x-[calc(100%+1rem)]"
         )}
       >
@@ -392,6 +504,57 @@ export default function App() {
                 onChange={(v) => update({ refractory: v })}
                 format={(v) => v + " " + t.sliders.steps}
               />
+              <Slider
+                label={t.sliders.adaptation}
+                hint={t.sliders.adaptationHint}
+                value={params.adaptation}
+                min={0}
+                max={3}
+                step={0.05}
+                onChange={(v) => update({ adaptation: v })}
+                format={(v) => v.toFixed(2)}
+              />
+            </Section>
+
+            <Section title={t.sections.learning}>
+              <div title={t.plasticityHint}>
+                <Toggle label={t.plasticity} checked={params.plasticity} onChange={(v) => update({ plasticity: v })} />
+              </div>
+              <p className="px-2 text-[11px] leading-snug text-slate-400">
+                {stats.learned
+                  ? t.learnStats(pct(stats.learnUp), pct(stats.learnDown))
+                  : params.plasticity
+                    ? t.plasticityHint
+                    : t.learnIdle}
+              </p>
+              {stats.learned && (
+                <button
+                  onClick={() => {
+                    sim.resetWeights();
+                    showToast(t.forgetToast);
+                  }}
+                  className="w-full rounded-lg border border-amber-300/30 py-1.5 text-[12px] text-amber-200 transition hover:bg-amber-300/10"
+                >
+                  {t.forget}
+                </button>
+              )}
+              <div className="flex items-center justify-between px-2 pt-1 text-[12px]">
+                <span className="text-slate-300">{t.lesioned}</span>
+                <span className="font-mono text-rose-300">{fmt(stats.dead)}</span>
+              </div>
+              {stats.dead > 0 ? (
+                <button
+                  onClick={() => {
+                    sim.healAll();
+                    showToast(t.healToast);
+                  }}
+                  className="w-full rounded-lg border border-rose-300/30 py-1.5 text-[12px] text-rose-200 transition hover:bg-rose-300/10"
+                >
+                  {t.heal}
+                </button>
+              ) : (
+                <p className="px-2 text-[11px] leading-snug text-slate-500">{t.lesionHint}</p>
+              )}
             </Section>
 
             <Section title={t.sections.network}>
@@ -443,7 +606,7 @@ export default function App() {
       {/* Sağ: Bölgeler & bilgi */}
       <aside
         className={cn(
-          "absolute right-4 top-24 bottom-20 z-10 w-[300px] max-w-[calc(100vw-4.5rem)] transition-transform duration-300",
+          "absolute right-4 top-24 bottom-28 lg:bottom-20 z-10 w-[300px] max-w-[calc(100vw-4.5rem)] transition-transform duration-300",
           !infoOpen && "translate-x-[calc(100%+1rem)]"
         )}
       >
@@ -456,8 +619,68 @@ export default function App() {
         </button>
         <div className="scrollbar-thin h-full overflow-y-auto rounded-2xl border border-white/10 bg-[#0a0e1c]/80 p-3 backdrop-blur-md">
           <div className="space-y-3">
-            <Section title={t.sections.eeg}>
-              <ActivityGraph sim={sim} />
+            {probeOn && stats.probe && (
+              <Section
+                title={t.sections.probe}
+                right={
+                  <button onClick={closeProbe} className="text-[12px] text-slate-400 hover:text-white" title={t.probe.close}>
+                    ✕
+                  </button>
+                }
+              >
+                <ProbeScope sim={sim} labels={{ v: t.probe.legendV, th: "- - " + t.probe.legendTh }} />
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                  <span className="text-slate-500">{t.probe.region}</span>
+                  <span className="text-right font-medium" style={{ color: REGIONS[stats.probe.region].color }}>
+                    {REGIONS[stats.probe.region].name[lang]}
+                  </span>
+                  <span className="text-slate-500">{t.probe.type}</span>
+                  <span className={cn("text-right", stats.probe.inhibitory ? "text-violet-300" : "text-emerald-300")}>
+                    {stats.probe.inhibitory ? t.probe.inhibitory : t.probe.excitatory}
+                    {stats.probe.dead && <span className="text-rose-300"> · {t.probe.lesioned}</span>}
+                  </span>
+                  <span className="text-slate-500">
+                    {t.probe.inputs} / {t.probe.outputs}
+                  </span>
+                  <span className="text-right font-mono text-slate-200">
+                    {stats.probe.inDeg} / {stats.probe.outDeg}
+                  </span>
+                  <span className="text-slate-500">{t.probe.inWeight}</span>
+                  <span className="text-right font-mono text-amber-200">{stats.probe.meanInWeight.toFixed(2)}×</span>
+                  <span className="text-slate-500">{t.probe.spikes}</span>
+                  <span className="text-right font-mono text-cyan-300">{fmt(stats.probeSpikes)}</span>
+                </div>
+                <button
+                  onClick={() => sim.injectProbe()}
+                  disabled={stats.probe.dead}
+                  className="w-full rounded-lg bg-cyan-500/90 py-1.5 text-[12px] font-semibold text-black transition hover:bg-cyan-400 disabled:opacity-40"
+                >
+                  {t.probe.inject}
+                </button>
+              </Section>
+            )}
+
+            <Section
+              title={t.sections.eeg}
+              right={
+                <Tabs
+                  value={eegTab}
+                  onChange={setEegTab}
+                  options={[
+                    { id: "eeg", label: t.eegTab },
+                    { id: "raster", label: t.rasterTab },
+                  ]}
+                />
+              }
+            >
+              {eegTab === "eeg" ? (
+                <ActivityGraph sim={sim} />
+              ) : (
+                <>
+                  <RasterPlot sim={sim} />
+                  <p className="text-[10px] leading-snug text-slate-500">{t.rasterHint}</p>
+                </>
+              )}
               <div className="grid grid-cols-3 gap-1 text-center lg:hidden">
                 <MiniStat label={t.stats.rateShort} value={fmt(stats.rate)} />
                 <MiniStat label={t.stats.activeShort} value={fmt(stats.active)} />
@@ -567,8 +790,13 @@ export default function App() {
               <p className="text-[10px] text-slate-500">
                 {t.shortcuts} <kbd className="rounded bg-white/10 px-1">{t.kbSpace}</kbd> {t.kbPause} ·{" "}
                 <kbd className="rounded bg-white/10 px-1">S</kbd> {t.kbStim} ·{" "}
-                <kbd className="rounded bg-white/10 px-1">R</kbd> {t.kbReset}
+                <kbd className="rounded bg-white/10 px-1">R</kbd> {t.kbReset} ·{" "}
+                <kbd className="rounded bg-white/10 px-1">1</kbd>
+                <kbd className="ml-0.5 rounded bg-white/10 px-1">2</kbd>
+                <kbd className="ml-0.5 rounded bg-white/10 px-1">3</kbd> {t.kbTools} ·{" "}
+                <kbd className="rounded bg-white/10 px-1">M</kbd> {t.kbSound}
               </p>
+              {!probeOn && <p className="text-[10px] leading-snug text-slate-500">{t.probe.placeholder}</p>}
             </Section>
           </div>
         </div>

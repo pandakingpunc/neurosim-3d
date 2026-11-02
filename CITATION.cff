@@ -9,15 +9,18 @@ abstract: >-
   distance-dependent delays and excitatory or inhibitory weights. Users can
   stimulate regions or single points, switch between mental-state presets
   (rest, focus, deep sleep, caffeine, seizure, anaesthesia), tune neuron
-  dynamics and watch spikes, signal pulses and an EEG-like activity trace in
-  real time. English and Turkish interfaces.
+  dynamics and watch spikes, signal pulses, an EEG-like activity trace and a
+  spike raster in real time. Version 1.1 adds spike-frequency adaptation (slow
+  waves in deep sleep, rhythmic seizure bursts), spike-timing-dependent
+  plasticity (STDP), a single-neuron probe with a live membrane-potential
+  trace, a lesion tool and spike sonification. English and Turkish interfaces.
 authors:
   - family-names: Karatüm
     given-names: Mustafa
     orcid: "https://orcid.org/0009-0006-7053-2872"
-version: 1.0.0
+version: 1.1.0
 license: MIT
-date-released: 2026-10-31
+date-released: 2026-11-02
 doi: 10.5281/zenodo.23837032
 identifiers:
   - type: doi
@@ -32,6 +35,9 @@ keywords:
   - neuroscience
   - spiking neural network
   - integrate-and-fire
+  - spike-timing-dependent plasticity
+  - synaptic plasticity
+  - slow-wave sleep
   - brain
   - neuron
   - education

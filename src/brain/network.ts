@@ -10,6 +10,9 @@ export interface Network {
   edgeDelays: Uint8Array;
   edgeFrom: Int32Array;
   edgeCount: number;
+  /** Ters CSR: nörona gelen sinapsların kenar indeksleri (STDP için) */
+  inOffsets: Int32Array;
+  inEdges: Int32Array;
 }
 
 function mulberry32(seed: number) {
@@ -186,7 +189,17 @@ export function generateNetwork(count: number, k: number, seed = 1): Network {
   }
   edgeOffsets[count] = e;
 
+  // Ters CSR (gelen kenarlar)
+  const inOffsets = new Int32Array(count + 1);
+  for (let j = 0; j < edgeCount; j++) inOffsets[edgeTargets[j] + 1]++;
+  for (let a = 0; a < count; a++) inOffsets[a + 1] += inOffsets[a];
+  const inEdges = new Int32Array(edgeCount);
+  const fill = inOffsets.slice(0, count);
+  for (let j = 0; j < edgeCount; j++) inEdges[fill[edgeTargets[j]]++] = j;
+
   return {
+    inOffsets,
+    inEdges,
     count,
     positions,
     region,
