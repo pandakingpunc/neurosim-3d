@@ -105,7 +105,7 @@ Mustafa Karatüm · ORCID [0009-0006-7053-2872](https://orcid.org/0009-0006-7053
 
 If you use NeuroSim 3D, please cite it through Zenodo:
 
-> Karatüm, M. (2026). *NeuroSim 3D: Interactive Brain & Neuron Firing Simulator* (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.23837033
+> Karatüm, M. (2026). *NeuroSim 3D: Interactive Brain & Neuron Firing Simulator* (v1.1.0). Zenodo. https://doi.org/10.5281/zenodo.23885997
 
 The concept DOI [10.5281/zenodo.23837032](https://doi.org/10.5281/zenodo.23837032) always points to the latest version. Citation metadata is in [CITATION.cff](CITATION.cff).
 
